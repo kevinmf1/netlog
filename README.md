@@ -8,6 +8,8 @@ On this checkout, the packaged macOS app is generated at `desktop/build/app/NetL
 
 The app automatically discovers every connected device and every running app with NetLog. Use the app/device filter when more than one is active. Disconnections and process restarts reconnect automatically; previous desktop rows remain until cleared or evicted.
 
+The live status names only devices with a working capture session. Retained rows from an earlier session do not mean that device is still connected.
+
 ## Integrate once per Android project
 
 Publish both artifacts locally from this directory:

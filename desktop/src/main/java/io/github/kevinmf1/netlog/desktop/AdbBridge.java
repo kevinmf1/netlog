@@ -70,6 +70,7 @@ final class AdbBridge implements AutoCloseable {
         List<JsonObject> records = new ArrayList<>();
         Set<String> active = new HashSet<>();
         List<String> notices = new ArrayList<>();
+        Set<String> capturingDevices = new LinkedHashSet<>();
         int devices = 0, apps = 0;
         try {
             for (String line : command("devices", "-l").split("\\R")) {
@@ -90,11 +91,11 @@ final class AdbBridge implements AutoCloseable {
                                 int port = Integer.parseInt(command("-s", serial, "forward", "tcp:0", "localabstract:" + name).strip());
                                 connection = new Connection(serial, name, port); connections.put(key, connection);
                             }
-                            records.addAll(fetch(connection)); apps++;
+                            records.addAll(fetch(connection)); apps++; capturingDevices.add(serial);
                         } catch (Exception error) {
                             Connection broken = connections.remove(key);
                             if (broken != null) remove(broken);
-                            notices.add(serial + ": open the app to resume capture");
+                            notices.add(serial + ": session unavailable; open the app or reconnect the device");
                         }
                     }
                 } catch (IOException error) { notices.add(serial + ": " + error.getMessage()); }
@@ -104,8 +105,8 @@ final class AdbBridge implements AutoCloseable {
                 Map.Entry<String, Connection> entry = iterator.next();
                 if (!active.contains(entry.getKey())) { remove(entry.getValue()); iterator.remove(); }
             }
-            String status = apps > 0 ? "Connected to " + apps + " app session(s) on " + devices + " device(s). Capturing automatically."
-                : devices > 0 ? devices + " device(s) ready. Open an app with NetLog installed to see requests."
+            String status = apps > 0 ? "Live capture on " + String.join(", ", capturingDevices) + " (" + apps + " app session(s))."
+                : devices > 0 ? "No live capture. " + devices + " device(s) detected; open an app with NetLog installed."
                 : "Start an emulator or connect a phone with USB debugging enabled.";
             if (!notices.isEmpty()) status += "  " + String.join(" • ", notices);
             return new Batch(records, status);
