@@ -1,0 +1,28 @@
+plugins { id 'java-gradle-plugin'; id 'maven-publish' }
+group = 'io.github.kevinmf1'
+version = '0.1.0-SNAPSHOT'
+repositories { google(); mavenCentral() }
+java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+configurations { okhttp4; okhttp5 }
+dependencies {
+    compileOnly 'com.android.tools.build:gradle-api:8.9.1'
+    compileOnly 'org.ow2.asm:asm:9.7.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.ow2.asm:asm:9.7.1'
+    testImplementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    okhttp4 'com.squareup.okhttp3:okhttp:4.12.0'
+    okhttp5 'com.squareup.okhttp3:okhttp:5.3.2'
+}
+// Each OkHttp version is loaded in its own class loader so the real constructor is transformed and executed.
+test {
+    inputs.files(configurations.okhttp4, configurations.okhttp5)
+    doFirst {
+        systemProperty 'okhttp4', configurations.okhttp4.asPath
+        systemProperty 'okhttp5', configurations.okhttp5.asPath
+    }
+}
+gradlePlugin {
+    plugins {
+        netlog { id = 'io.github.kevinmf1.netlog'; implementationClass = 'io.github.kevinmf1.netlog.gradle.NetLogPlugin' }
+    }
+}

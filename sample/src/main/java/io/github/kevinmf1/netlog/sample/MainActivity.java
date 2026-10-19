@@ -3,7 +3,6 @@ package io.github.kevinmf1.netlog.sample;
 import android.app.Activity;
 import android.os.Bundle;
 import android.widget.*;
-import io.github.kevinmf1.netlog.NetLogInterceptor;
 import okhttp3.*;
 import java.io.*;
 import java.net.*;
@@ -20,7 +19,7 @@ public final class MainActivity extends Activity {
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL); layout.setPadding(40, 80, 40, 40);
         status = new TextView(this); status.setText("NetLog sample\nLocal test traffic, no account or external server required."); status.setTextSize(20); layout.addView(status);
         Button send = new Button(this); send.setText("Send test requests"); layout.addView(send); setContentView(layout);
-        client = new OkHttpClient.Builder().addInterceptor(new NetLogInterceptor(this)).build();
+        client = new OkHttpClient.Builder().build();
         send.setOnClickListener(v -> send());
         try {
             server = new ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"));
@@ -50,7 +49,8 @@ public final class MainActivity extends Activity {
                 for (String path : new String[]{"/products", "/unauthorized", "/unavailable", "/cart"}) {
                     Request.Builder request = new Request.Builder().url("http://127.0.0.1:" + server.getLocalPort() + path).header("Authorization", "Bearer sample-secret");
                     if (path.equals("/cart")) request.post(RequestBody.create("{\"product\":\"coffee\",\"quantity\":2}", MediaType.get("application/json")));
-                    try (Response response = client.newCall(request.build()).execute()) { response.body().string(); }
+                    OkHttpClient selected = path.equals("/unauthorized") ? new OkHttpClient() : path.equals("/unavailable") ? client.newBuilder().build() : client;
+                    try (Response response = selected.newCall(request.build()).execute()) { response.body().string(); }
                 }
                 runOnUiThread(() -> status.setText("4 test requests sent.\nOpen NetLog on your computer. This emulator or phone will appear automatically."));
             } catch (Exception error) { runOnUiThread(() -> status.setText(error.toString())); }

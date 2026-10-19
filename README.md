@@ -14,13 +14,33 @@ The live status names only devices with a working capture session. Retained rows
 
 ## Integrate once per Android project
 
-Publish both artifacts locally from this directory:
+Publish the runtime and the Gradle plugin locally from this directory:
 
 ```sh
-./gradlew :netlog:publishReleasePublicationToMavenLocal :netlog-no-op:publishReleasePublicationToMavenLocal
+./gradlew :netlog:publishReleasePublicationToMavenLocal
+./gradlew -p netlog-gradle-plugin publishToMavenLocal
 ```
 
-Add `mavenLocal()` to your dependency repositories, then:
+Add `mavenLocal()` to both `pluginManagement` and dependency repositories, then apply the plugin to the Android application module:
+
+```kotlin
+plugins {
+    id("com.android.application")
+    id("io.github.kevinmf1.netlog") version "0.1.0-SNAPSHOT"
+}
+```
+
+With the legacy `apply plugin:` syntax, add `classpath "io.github.kevinmf1:netlog-gradle-plugin:0.1.0-SNAPSHOT"` to the root `buildscript` and use `apply plugin: "io.github.kevinmf1.netlog"`.
+
+Rebuild the debug app. No code changes are needed. For every debuggable variant, the plugin adds the runtime and rewrites the `okhttp3.OkHttpClient(Builder)` constructor in the app and all of its dependencies, so every client gets the capture interceptor, including SDK-owned clients, `new OkHttpClient()`, and `newBuilder().build()` copies. It is added last, after interceptors that already exist on the builder. Non-debuggable variants are not touched: no runtime, provider, or bytecode change.
+
+Remove any manual `NetLogInterceptor` dependency when switching to the plugin; a builder that already has one is not given a second. Do not keep an older collector with a different Maven group in the same app.
+
+Tested with AGP 8.9.1 and OkHttp 4.12.0 (sample on an emulator) and the constructor rewrite with OkHttp 5.3.2 (unit test). Not covered: WebView, Cronet, `HttpURLConnection`, native sockets, shaded/relocated OkHttp, secondary app processes, and requests sent before the app's content providers start. The artifacts are local snapshots, not published to a remote repository.
+
+### Manual interceptor
+
+Without the plugin, add the interceptor yourself:
 
 ```kotlin
 debugImplementation("io.github.kevinmf1:netlog:0.1.0-SNAPSHOT")
@@ -30,9 +50,9 @@ releaseImplementation("io.github.kevinmf1:netlog-no-op:0.1.0-SNAPSHOT")
 builder.addInterceptor(NetLogInterceptor(context))
 ```
 
-The Android library has no activity, notifications, extra permissions, TLS overrides, or JVMTI agent. The no-op artifact has only the interceptor API and forwards calls unchanged. The capture artifact also refuses to activate in a non-debuggable app. Use the no-op dependency for every production build type, including custom build types.
+Publish the no-op artifact too with `:netlog-no-op:publishReleasePublicationToMavenLocal`. Only clients you configure are captured.
 
-The artifacts are local snapshots, not published to a remote Maven repository. Integrate the interceptor into each OkHttp client you want to inspect. Clients created internally by other SDKs are not automatically captured.
+The Android library has no activity, notifications, extra permissions, TLS overrides, or JVMTI agent. The no-op artifact has only the interceptor API and forwards calls unchanged. The capture artifact also refuses to activate in a non-debuggable app.
 
 ## Build and test
 
@@ -40,6 +60,7 @@ JDK 17+, Android SDK 36, and SDK platform-tools are required for development. Th
 
 ```sh
 ./gradlew :netlog:testDebugUnitTest :desktop:test :sample:assembleDebug
+./gradlew -p netlog-gradle-plugin test
 ./gradlew :desktop:packageMac
 ```
 
@@ -49,7 +70,7 @@ For an independent emulator/device test, install `sample/build/outputs/apk/debug
 
 ## Capture behavior
 
-- Only OkHttp clients with the interceptor are captured; Retrofit using those clients is covered. This is app-level inspection, not packet capture or a system-wide proxy.
+- Only OkHttp clients are captured (all of them with the plugin, otherwise those given the interceptor); Retrofit using those clients is covered. This is app-level inspection, not packet capture or a system-wide proxy.
 - Application interceptors show logical calls; automatic redirects/retries are not separate rows. The final URL is displayed. Place NetLog after authentication interceptors to see their changes.
 - Request bodies are copied as OkHttp sends them, never written a second time. One-shot behavior is preserved; duplex request bodies are omitted.
 - Response bodies are copied as the application consumes them. An unconsumed body stays in `Reading body`; closing early is explicitly marked. Streaming responses are not drained or delayed to populate the inspector. The body is finalized on EOF, declared length, or close; continuous live stream previews are not supported.
@@ -57,7 +78,7 @@ For an independent emulator/device test, install `sample/build/outputs/apk/debug
 - Timing distinguishes response headers from elapsed time through body completion/close. Response byte count is bytes consumed by the app, not wire size.
 - Android retains at most 200 rows and two million serialized characters; desktop at most 1,000 rows and eight million serialized characters. Both are memory-only. Large bodies can cause earlier eviction. Capture has bounded memory/copying overhead; release uses the no-op artifact.
 - Pause freezes the view while capture continues. Clear removes retained desktop rows and ignores further updates to those same requests; new requests still appear. Device-side retained rows can reappear after reopening the desktop app.
-- Authorization, Proxy-Authorization, Cookie, Set-Cookie, and X-Api-Key headers are redacted before transfer. Additional header names can be passed after `context` in the interceptor constructor. URL credentials and common sensitive query parameters are redacted. Body fields and arbitrary query/header names are **not** automatically sanitized; use test accounts and avoid sharing sensitive payloads. Copied cURL uses redacted values and may need credentials/body replacement before replay.
+- Authorization, Proxy-Authorization, Cookie, Set-Cookie, and X-Api-Key headers are redacted before transfer. Additional header names can be passed after `context` in the manual interceptor constructor. URL credentials and common sensitive query parameters are redacted. Body fields and arbitrary query/header names are **not** automatically sanitized; use test accounts and avoid sharing sensitive payloads. Copied cURL uses redacted values and may need credentials/body replacement before replay.
 
 ## Transport
 
