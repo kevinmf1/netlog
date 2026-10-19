@@ -88,3 +88,9 @@ For an independent emulator/device test, install `sample/build/outputs/apk/debug
 The debug library binds an Android abstract local socket named `netlog.v1.<package>.<pid>`. The desktop enumerates ADB devices, discovers those sockets through `/proc/net/unix`, and allocates a loopback ADB forward with `tcp:0`. This same route works for emulators and USB devices, with no emulator-specific IP or network security configuration. The server permits only shell/root or its own UID and does not listen on Wi-Fi. The desktop removes only the forwards it created, without stopping the shared ADB server.
 
 Protocol v1 is newline-delimited JSON. Client sends its numeric revision cursor and a newline. Server sends a `hello` with package/session identity, changed retained records, and an `end` cursor. Body completion updates the same request ID. Session UUIDs separate app restarts. Timeouts, size limits, and bounded stores protect the capture path. Some vendor devices may restrict shell access to `/proc/net/unix`; these need device testing and cannot be assumed compatible merely because an emulator passed.
+
+## License
+
+Copyright 2026 Kevin Malik Fajar (kevinmf1)
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE). Redistributions must keep the copyright notice and the [NOTICE](NOTICE) file.

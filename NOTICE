@@ -1,0 +1,8 @@
+NetLog
+Copyright 2026 Kevin Malik Fajar (kevinmf1)
+
+This product includes software developed by Kevin Malik Fajar (kevinmf1)
+at https://github.com/kevinmf1/netlog.
+
+The packaged macOS desktop app bundles Android SDK Platform-Tools (adb),
+which is licensed separately; its notices are included in the app package.
