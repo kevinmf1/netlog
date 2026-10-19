@@ -2,6 +2,8 @@
 
 An Android HTTP collector with a desktop inspector. Open NetLog, run an instrumented debug app on an emulator or USB device, and requests appear automatically. No proxy, certificates, IP address, Android Studio attachment, or cloud account.
 
+The request table shows a short **Name** (the endpoint's last path segment) alongside the full **URL**. Click any column header to sort ascending or descending; Time and Duration sort by their numeric values. Sorting stays active as new requests arrive, and the selected request keeps its detail panel. Hover over Name or URL to see the full URL. For keyboard sorting, focus the table header, choose a column with Left/Right, and press Enter or Space.
+
 ## Open the desktop app
 
 On this checkout, the packaged macOS app is generated at `desktop/build/app/NetLog.app`. Double-click it. It includes Java and Android platform-tools; users do not need a Java installation or to configure ADB. USB phones still require Android's normal USB debugging authorization. A running emulator needs no additional setup.
