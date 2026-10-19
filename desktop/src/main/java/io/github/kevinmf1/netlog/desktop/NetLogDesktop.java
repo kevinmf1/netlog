@@ -357,6 +357,10 @@ public final class NetLogDesktop {
                     super.installUI(c); listBox.setBackground(surface); listBox.setForeground(foreground);
                     listBox.setSelectionBackground(selection); listBox.setSelectionForeground(foreground);
                 }
+                // Basic paints the LAF's light ComboBox.background here, and the renderer is transparent when it matches the combo.
+                @Override public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
+                    g.setColor(comboBox.getBackground()); g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+                }
                 @Override protected JButton createArrowButton() {
                     JButton arrow = new JButton("▾"); arrow.setName("comboArrow"); return arrow;
                 }

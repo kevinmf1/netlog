@@ -53,6 +53,13 @@ public class ViewTest {
                     java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(content.getWidth(), content.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
                     Graphics2D graphics = image.createGraphics(); content.printAll(graphics); graphics.dispose();
                     assertNotEquals("The rendered content must not be blank", Color.BLACK.getRGB(), image.getRGB(5, 5));
+                    JComboBox<?> apps = field(app, "applications");
+                    java.awt.image.BufferedImage combo = new java.awt.image.BufferedImage(apps.getWidth(), apps.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+                    // The renderer turns transparent when it matches the combo, so this fill is what sits behind the text.
+                    Graphics2D comboGraphics = combo.createGraphics();
+                    ((javax.swing.plaf.basic.BasicComboBoxUI) apps.getUI()).paintCurrentValueBackground(comboGraphics, new Rectangle(apps.getSize()), false);
+                    comboGraphics.dispose();
+                    assertEquals(mode + " source filter text needs its own background", apps.getBackground().getRGB(), combo.getRGB(4, apps.getHeight() / 2));
                     java.nio.file.Path destination = java.nio.file.Path.of("build", "ui-review", mode + ".png");
                     java.nio.file.Files.createDirectories(destination.getParent());
                     javax.imageio.ImageIO.write(image, "png", destination.toFile());
