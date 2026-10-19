@@ -1,0 +1,17 @@
+plugins { id 'com.android.library'; id 'maven-publish' }
+android {
+    namespace 'io.github.kevinmf1.netlog'
+    compileSdk 36
+    defaultConfig { minSdk 24 }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    publishing { singleVariant('release') }
+}
+dependencies {
+    api 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.json:json:20240303'
+}
+afterEvaluate {
+    publishing { publications { release(MavenPublication) { from components.release; artifactId = 'netlog' } } }
+}

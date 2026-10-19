@@ -1,0 +1,43 @@
+plugins { id 'application' }
+java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+application { mainClass = 'io.github.kevinmf1.netlog.desktop.NetLogDesktop' }
+dependencies {
+    implementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation 'junit:junit:4.13.2'
+}
+def packagedApp = layout.buildDirectory.dir('app/NetLog.app')
+def stagingApp = layout.buildDirectory.dir('app-staging/NetLog.app')
+
+tasks.register('packageMac', Exec) {
+    dependsOn installDist
+    doFirst {
+        def running = ProcessHandle.allProcesses().anyMatch { process ->
+            process.info().command().orElse('').startsWith(packagedApp.get().asFile.absolutePath + '/')
+        }
+        if (running) throw new GradleException('Close NetLog before replacing its app package')
+        def sdk = System.getenv('ANDROID_HOME') ?: "${System.getProperty('user.home')}/Library/Android/sdk"
+        def input = layout.buildDirectory.dir('package-input').get().asFile
+        delete input
+        copy { from tasks.installDist.destinationDir.toPath().resolve('lib'); into input }
+        copy {
+            from "${sdk}/platform-tools"
+            include 'adb', 'lib64/**', 'NOTICE.txt', 'source.properties'
+            into new File(input, 'platform-tools')
+        }
+        if (!new File(input, 'platform-tools/adb').exists()) throw new GradleException('Android SDK platform-tools required to package ADB')
+        def output = stagingApp.get().asFile.parentFile
+        delete stagingApp
+        commandLine "${System.getProperty('java.home')}/bin/jpackage", '--type', 'app-image',
+            '--name', 'NetLog', '--app-version', '1.0.0', '--vendor', 'kevinmf1',
+            '--input', input, '--main-jar', tasks.jar.archiveFileName.get(),
+            '--main-class', application.mainClass.get(), '--dest', output,
+            '--mac-package-identifier', 'io.github.kevinmf1.netlog.desktop',
+            '--java-options', '-Dapple.awt.application.name=NetLog'
+    }
+    doLast {
+        exec { commandLine '/usr/bin/codesign', '--verify', '--deep', '--strict', stagingApp.get().asFile }
+        delete packagedApp
+        packagedApp.get().asFile.parentFile.mkdirs()
+        java.nio.file.Files.move(stagingApp.get().asFile.toPath(), packagedApp.get().asFile.toPath())
+    }
+}

@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+local.properties
+.DS_Store
+.idea/
+*.iml
+.serena/
+/graphify-out/
+/DESIGN.md
+/TESTING.md
+!gradle/wrapper/gradle-wrapper.jar
