@@ -22,13 +22,19 @@ public class NetLogInterceptorTest {
     @After public void close() throws IOException { server.shutdown(); client.connectionPool().evictAll(); client.dispatcher().executorService().shutdownNow(); }
     private JSONObject last() throws Exception { List<String> rows = store.since(0); return new JSONObject(rows.get(rows.size() - 2)); }
 
-    @Test public void preservesResponseAndRedactsSecrets() throws Exception {
-        server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setHeader("Set-Cookie", "secret").setBody("{\"ok\":true}"));
-        try (Response response = client.newCall(new Request.Builder().url(server.url("/check?token=secret")).header("Authorization", "secret").build()).execute()) {
+    @Test public void preservesResponseAndSendsRawValuesExceptNamedHeaders() throws Exception {
+        OkHttpClient named = new OkHttpClient.Builder().addInterceptor(new NetLogInterceptor(store, "X-Internal")).build();
+        server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setHeader("Set-Cookie", "session=raw").setBody("{\"ok\":true}"));
+        try (Response response = named.newCall(new Request.Builder().url(server.url("/check?token=raw-query"))
+                .header("Authorization", "Bearer raw-token").header("X-Internal", "never-sent").build()).execute()) {
             assertEquals("{\"ok\":true}", response.body().string());
         }
         JSONObject record = last(); assertEquals(200, record.getInt("status")); assertEquals("Complete", record.getString("state"));
-        assertFalse(record.toString().contains("secret")); assertEquals("{\"ok\":true}", record.getString("responseBody"));
+        // The desktop masks these for display; the device sends them so they can be revealed and replayed.
+        assertTrue(record.getString("url").endsWith("token=raw-query"));
+        assertTrue(record.toString().contains("Bearer raw-token")); assertTrue(record.toString().contains("session=raw"));
+        assertFalse("Headers named by the app are never sent", record.toString().contains("never-sent"));
+        assertEquals("{\"ok\":true}", record.getString("responseBody"));
     }
 
     @Test public void sendsOneShotBodyExactlyOnce() throws Exception {

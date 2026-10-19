@@ -17,8 +17,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class NetLogInterceptor implements Interceptor {
     private static final AtomicLong IDS = new AtomicLong();
     private static final int LIMIT = 64 * 1024;
-    private final Set<String> secrets = new HashSet<>(Arrays.asList(
-        "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"));
+    // Values are sent as-is; the desktop hides common secrets until the user reveals them.
+    // Headers named by the app are never sent.
+    private final Set<String> secrets = new HashSet<>();
     private final CaptureStore store;
     private final boolean enabled;
 
@@ -29,7 +30,10 @@ public final class NetLogInterceptor implements Interceptor {
         try { LocalBridge.start(context.getApplicationContext()); } catch (Exception ignored) { }
     }
 
-    NetLogInterceptor(CaptureStore store) { this.store = store; this.enabled = true; }
+    NetLogInterceptor(CaptureStore store, String... redactedHeaders) {
+        this.store = store; this.enabled = true;
+        for (String name : redactedHeaders) secrets.add(name.toLowerCase(Locale.ROOT));
+    }
 
     @Override public Response intercept(Chain chain) throws IOException {
         if (!enabled) return chain.proceed(chain.request());
@@ -72,7 +76,7 @@ public final class NetLogInterceptor implements Interceptor {
         }
         entry.set("status", response.code());
         entry.set("responseHeaders", headers(response.headers()));
-        entry.set("finalUrl", safeUrl(response.request().url()));
+        entry.set("finalUrl", response.request().url().toString());
         entry.set("headersMs", (System.nanoTime() - entry.start) / 1_000_000);
         ResponseBody responseBody = response.body();
         if (responseBody == null) { entry.set("state", "Complete"); entry.finish(); return response; }
@@ -138,23 +142,13 @@ public final class NetLogInterceptor implements Interceptor {
         return result;
     }
 
-    private static String safeUrl(HttpUrl url) {
-        HttpUrl.Builder builder = url.newBuilder().username("").password("");
-        for (String key : url.queryParameterNames()) {
-            String name = key.toLowerCase(Locale.ROOT);
-            if (name.contains("token") || name.contains("secret") || name.contains("password") || name.equals("api_key") || name.equals("apikey"))
-                builder.setQueryParameter(key, "[REDACTED]");
-        }
-        return builder.build().toString();
-    }
-
     private final class Entry {
         final long id = IDS.incrementAndGet();
         final long start = System.nanoTime();
         final JSONObject json = new JSONObject();
         Entry(Request request) {
             set("type", "request"); set("id", id); set("time", System.currentTimeMillis());
-            set("method", request.method()); set("url", safeUrl(request.url()));
+            set("method", request.method()); set("url", request.url().toString());
             set("requestHeaders", headers(request.headers())); set("state", "Pending");
         }
         synchronized void set(String key, Object value) { try { json.put(key, value); } catch (Exception ignored) { } }

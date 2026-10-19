@@ -21,6 +21,11 @@ public class ViewTest {
         record.addProperty("method", method); record.addProperty("status", 200); record.addProperty("url", "https://example.test/" + id);
         return record;
     }
+    private static void headerClick(JTable table, int pressX, int releaseX, int clicks) {
+        javax.swing.table.JTableHeader header = table.getTableHeader();
+        header.dispatchEvent(new java.awt.event.MouseEvent(header, java.awt.event.MouseEvent.MOUSE_PRESSED, 0, java.awt.event.InputEvent.BUTTON1_DOWN_MASK, pressX, 5, clicks, false, java.awt.event.MouseEvent.BUTTON1));
+        header.dispatchEvent(new java.awt.event.MouseEvent(header, java.awt.event.MouseEvent.MOUSE_RELEASED, 0, 0, releaseX, 5, clicks, false, java.awt.event.MouseEvent.BUTTON1));
+    }
     private static void ingest(NetLogDesktop app, JsonObject... records) throws Exception {
         Method method = NetLogDesktop.class.getDeclaredMethod("ingest", AdbBridge.Batch.class); method.setAccessible(true);
         method.invoke(app, new AdbBridge.Batch(List.of(records), "Component test"));
@@ -72,6 +77,29 @@ public class ViewTest {
         });
     }
 
+    @Test public void appColumnCanBeWidenedAndKeepsItsWidth() throws Exception {
+        Assume.assumeFalse("Requires a graphics environment for an invisible JFrame", GraphicsEnvironment.isHeadless());
+        SwingUtilities.invokeAndWait(() -> {
+            NetLogDesktop app = new NetLogDesktop();
+            try {
+                JFrame frame = field(app, "frame"); frame.setSize(1000, 640); frame.addNotify(); frame.validate();
+                JTable table = field(app, "table"); javax.swing.table.JTableHeader header = table.getTableHeader();
+                int before = table.getColumnModel().getColumn(6).getWidth();
+                Rectangle url = header.getHeaderRect(5); int edge = url.x + url.width - 1;
+                header.dispatchEvent(new java.awt.event.MouseEvent(header, java.awt.event.MouseEvent.MOUSE_PRESSED, 0, java.awt.event.InputEvent.BUTTON1_DOWN_MASK, edge, 10, 1, false, java.awt.event.MouseEvent.BUTTON1));
+                header.dispatchEvent(new java.awt.event.MouseEvent(header, java.awt.event.MouseEvent.MOUSE_DRAGGED, 0, java.awt.event.InputEvent.BUTTON1_DOWN_MASK, edge - 150, 10, 0, false));
+                table.doLayout(); // a real drag lays out while the column is still being resized
+                header.dispatchEvent(new java.awt.event.MouseEvent(header, java.awt.event.MouseEvent.MOUSE_RELEASED, 0, 0, edge - 150, 10, 1, false, java.awt.event.MouseEvent.BUTTON1));
+                ingest(app, request(1, "GET", "Component test")); frame.validate(); table.doLayout();
+                assertTrue("App / device should take the width given up by URL", table.getColumnModel().getColumn(6).getWidth() >= before + 140);
+            } catch (Exception error) { throw new RuntimeException(error); }
+            finally {
+                try { ((ScheduledExecutorService) field(app, "worker")).shutdownNow(); ((JFrame) field(app, "frame")).dispose(); }
+                catch (Exception error) { throw new RuntimeException(error); }
+            }
+        });
+    }
+
     @Test public void endpointNamesKeepFullUrlsSeparate() {
         assertEquals("customer-tier", NetLogDesktop.endpointName("https://example.test/api/customer-tier?page=2"));
         assertEquals("handshake", NetLogDesktop.endpointName("https://example.test/mts/handshake/"));
@@ -95,10 +123,14 @@ public class ViewTest {
                 ingest(app, early, late);
                 RowSorter<?> sorter = table.getRowSorter();
                 assertEquals(10L, table.getValueAt(0, 0));
+                JFrame frame = field(app, "frame"); frame.setSize(1000, 640); frame.addNotify(); frame.validate(); // header needs real bounds, or every press counts as a resize
                 Rectangle nameHeader = table.getTableHeader().getHeaderRect(1);
-                table.getTableHeader().dispatchEvent(new java.awt.event.MouseEvent(table.getTableHeader(),
-                    java.awt.event.MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), 0, nameHeader.x + 5, 5, 1, false, java.awt.event.MouseEvent.BUTTON1));
+                // A trackpad click that moves slightly, then a quick second click (click count 2), must each sort.
+                headerClick(table, nameHeader.x + 20, nameHeader.x + 23, 1);
                 assertEquals("Header clicks must sort the table", 1, sorter.getSortKeys().get(0).getColumn());
+                assertEquals(SortOrder.ASCENDING, sorter.getSortKeys().get(0).getSortOrder());
+                headerClick(table, nameHeader.x + 20, nameHeader.x + 20, 2);
+                assertEquals("A quick second click must reverse the order", SortOrder.DESCENDING, sorter.getSortKeys().get(0).getSortOrder());
                 sorter.setSortKeys(List.of(new RowSorter.SortKey(0, SortOrder.ASCENDING)));
                 assertEquals(9L, table.getValueAt(0, 0));
                 sorter.setSortKeys(List.of(new RowSorter.SortKey(4, SortOrder.ASCENDING)));

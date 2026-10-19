@@ -24,8 +24,10 @@ public final class AutoCapture {
     public static void attach(OkHttpClient.Builder builder) {
         if (builder == null) return;
         for (Interceptor interceptor : builder.interceptors()) {
-            if (interceptor == AUTOMATIC || interceptor instanceof NetLogInterceptor) return;
+            if (interceptor instanceof NetLogInterceptor) return;
         }
+        // newBuilder() copies capture from the base client; move it after interceptors added since, such as auth.
+        builder.interceptors().remove(AUTOMATIC);
         builder.addInterceptor(AUTOMATIC);
     }
 }

@@ -9,6 +9,8 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
 import java.nio.file.*;
 import java.net.URI;
+import java.net.http.*;
+import java.time.Duration;
 import javax.swing.plaf.basic.*;
 import javax.swing.border.*;
 import java.text.SimpleDateFormat;
@@ -33,9 +35,22 @@ public final class NetLogDesktop {
     private final JButton curl = new JButton("Copy cURL");
     private final JButton clear = new JButton("Clear");
     private final JButton theme = new JButton("Dark mode");
+    // The device sends real header and query values; they are masked here until the user reveals them.
+    private final JToggleButton secrets = new JToggleButton("Show sensitive values");
+    static final Set<String> SECRET_HEADERS = Set.of("authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key");
     private final JPanel detailCards = new JPanel(new CardLayout());
     private int selectedDetail;
     private final JTextArea overview = area(), request = area(), response = area();
+    // Image responses are previewed by downloading the URL from the desktop, only once the Response view is open.
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NORMAL).build();
+    private static final int PREVIEW_LIMIT = 10 * 1024 * 1024;
+    private final JLabel preview = new JLabel("", SwingConstants.CENTER);
+    private final ExecutorService images = Executors.newSingleThreadExecutor(task -> { Thread thread = new Thread(task, "NetLog image preview"); thread.setDaemon(true); return thread; });
+    // ponytail: last 20 previews kept in memory; a disk cache only if reopening images gets slow.
+    private final Map<String, Object> previews = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, Object> eldest) { return size() > 20; }
+    };
+    private String previewUrl = "";
     private final AbstractTableModel model = new AbstractTableModel() {
         final String[] columns = {"Time", "Name", "Method", "Status", "Duration", "URL", "App / device"};
         @Override public int getRowCount() { return visible.size(); }
@@ -50,13 +65,17 @@ public final class NetLogDesktop {
                 case 2 -> text(value, "method");
                 case 3 -> value.has("status") ? text(value, "status") : text(value, "state");
                 case 4 -> value.has("durationMs") ? value.get("durationMs").getAsLong() : null;
-                case 5 -> text(value, "url");
+                case 5 -> shownUrl(text(value, "url"));
                 default -> appName(value);
             };
         }
     };
     private final JTable table = new JTable(model);
-    private final TableRowSorter<AbstractTableModel> sorter = new TableRowSorter<>(model);
+    // Swing sorts on mouseClicked, which ignores every second quick click and any click with a slight drag.
+    // Header clicks are handled on release instead (see sortBy).
+    private final TableRowSorter<AbstractTableModel> sorter = new TableRowSorter<>(model) {
+        @Override public void toggleSortOrder(int column) { }
+    };
     private final JLabel selectedRequest = new JLabel("Request details");
     private Color background, surface, foreground, muted, line, selection, accent;
     private int headerColumn;
@@ -123,7 +142,8 @@ public final class NetLogDesktop {
         table.setDefaultRenderer(Object.class, new RequestCell());
         table.setDefaultRenderer(Long.class, new RequestCell());
         int[] widths = {112, 190, 76, 82, 96, 380, 220};
-        int[] minimums = {104, 130, 70, 74, 90, 210, 180};
+        // Short fixed-format columns keep their content; Name, URL, and App / device can give width to each other.
+        int[] minimums = {104, 80, 70, 74, 90, 100, 100};
         for (int i = 0; i < widths.length; i++) {
             TableColumn column = table.getColumnModel().getColumn(i); column.setPreferredWidth(widths[i]); column.setMinWidth(minimums[i]);
         }
@@ -131,15 +151,27 @@ public final class NetLogDesktop {
         table.getTableHeader().setReorderingAllowed(false); table.getTableHeader().setPreferredSize(new Dimension(0, 34));
         table.getTableHeader().setDefaultRenderer(new ColumnHeader());
         table.getTableHeader().setFocusable(true);
-        table.getTableHeader().setToolTipText("Click to sort. Keyboard: Left / Right to choose a column, Enter to sort.");
+        table.getTableHeader().setToolTipText("Click to sort. Drag a column edge to resize. Keyboard: Left / Right to choose a column, Enter to sort.");
         table.getTableHeader().getAccessibleContext().setAccessibleDescription("Use Left or Right to choose a column and Enter or Space to sort.");
         table.getTableHeader().addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_LEFT) headerColumn = Math.max(0, headerColumn - 1);
                 else if (e.getKeyCode() == KeyEvent.VK_RIGHT) headerColumn = Math.min(model.getColumnCount() - 1, headerColumn + 1);
-                else if (e.getKeyCode() == KeyEvent.VK_ENTER || e.getKeyCode() == KeyEvent.VK_SPACE) sorter.toggleSortOrder(headerColumn);
+                else if (e.getKeyCode() == KeyEvent.VK_ENTER || e.getKeyCode() == KeyEvent.VK_SPACE) sortBy(headerColumn);
                 else return;
                 e.consume(); table.getTableHeader().repaint();
+            }
+        });
+        table.getTableHeader().addMouseListener(new MouseAdapter() {
+            private Point pressed; private int column = -1;
+            // Runs after the header UI's own listener, so a press on a column edge is already marked as a resize.
+            @Override public void mousePressed(MouseEvent e) {
+                pressed = e.getPoint();
+                column = SwingUtilities.isLeftMouseButton(e) && table.getTableHeader().getResizingColumn() == null ? table.getTableHeader().columnAtPoint(pressed) : -1;
+            }
+            @Override public void mouseReleased(MouseEvent e) {
+                if (column >= 0 && column == table.getTableHeader().columnAtPoint(e.getPoint()) && pressed.distance(e.getPoint()) <= 6) sortBy(column);
+                column = -1;
             }
         });
         table.getTableHeader().addFocusListener(new FocusAdapter() {
@@ -156,12 +188,13 @@ public final class NetLogDesktop {
         for (int i = 0; i < views.length; i++) {
             final int index = i; String view = views[i];
             JToggleButton button = new JToggleButton(view, i == 0);
-            button.addActionListener(e -> { selectedDetail = index; ((CardLayout) detailCards.getLayout()).show(detailCards, view); });
+            button.addActionListener(e -> { selectedDetail = index; ((CardLayout) detailCards.getLayout()).show(detailCards, view); if (index == 2) loadPreview(selected()); });
             detailGroup.add(button); detailNavigation.add(button);
-            detailCards.add(new JScrollPane(bodies[i]), view);
+            detailCards.add(new JScrollPane(i == 2 ? new PreviewAbove(preview, response) : bodies[i]), view);
         }
+        preview.setVisible(false); preview.getAccessibleContext().setAccessibleName("Image preview");
         overview.getAccessibleContext().setAccessibleName("Request overview"); request.getAccessibleContext().setAccessibleName("Request headers and body"); response.getAccessibleContext().setAccessibleName("Response headers and body");
-        JPanel tools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0)); tools.add(copy); tools.add(curl);
+        JPanel tools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0)); tools.add(secrets); tools.add(copy); tools.add(curl);
         detailHeader.add(detailNavigation, BorderLayout.WEST); detailHeader.add(tools, BorderLayout.EAST);
         JPanel detailTop = new JPanel(new BorderLayout(0, 8)); selectedRequest.setName("endpoint");
         detailTop.add(detailHeader, BorderLayout.NORTH); detailTop.add(selectedRequest, BorderLayout.SOUTH);
@@ -190,7 +223,9 @@ public final class NetLogDesktop {
             records.clear(); refresh();
         });
         copy.addActionListener(e -> clipboard(switch(selectedDetail) { case 1 -> request.getText(); case 2 -> response.getText(); default -> overview.getText(); }));
-        curl.addActionListener(e -> { JsonObject selected = selected(); if (selected != null) clipboard(curl(selected)); });
+        curl.addActionListener(e -> { JsonObject selected = selected(); if (selected != null) clipboard(curl(shown(selected))); });
+        secrets.getAccessibleContext().setAccessibleDescription("Shows or hides authorization, cookie, and API key values in the view and in copies.");
+        secrets.addActionListener(e -> { secrets.setText(secrets.isSelected() ? "Hide sensitive values" : "Show sensitive values"); table.repaint(); showDetail(); });
         theme.addActionListener(e -> { dark = !dark; applyTheme(); });
         locate.addActionListener(e -> {
             JFileChooser chooser = new JFileChooser(); chooser.setDialogTitle("Select Android SDK platform-tools/adb");
@@ -204,7 +239,7 @@ public final class NetLogDesktop {
         applyTheme(); showDetail();
     }
 
-    private void clipboard(String value) { Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(value), null); summary.setText("Copied to clipboard. Sensitive header values remain redacted."); }
+    private void clipboard(String value) { Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(value), null); summary.setText(secrets.isSelected() ? "Copied to clipboard, including sensitive values." : "Copied to clipboard. Sensitive values are hidden."); }
 
     private void ingest(AdbBridge.Batch batch) {
         connection.setText(batch.status()); connection.setToolTipText(batch.status());
@@ -256,8 +291,10 @@ public final class NetLogDesktop {
     private void showDetail() {
         JsonObject value = selected(); copy.setEnabled(value != null); curl.setEnabled(value != null);
         selectedRequest.setText(value == null ? "Request details" : text(value, "method") + "  " + endpointName(text(value, "url")));
-        selectedRequest.setToolTipText(value == null ? null : text(value, "url"));
+        selectedRequest.setToolTipText(value == null ? null : shownUrl(text(value, "url")));
+        if (selectedDetail == 2) loadPreview(value);
         if (value == null) { overview.setText("Select a request to inspect its timing, headers, and body."); request.setText(""); response.setText(""); return; }
+        value = shown(value);
         String info = text(value, "method") + " " + text(value, "url") + "\n\n"
             + "Status: " + text(value, "status") + "  " + text(value, "state") + "\n"
             + "App: " + text(value, "app") + " (" + text(value, "package") + ")\nDevice: " + text(value, "device")
@@ -265,6 +302,111 @@ public final class NetLogDesktop {
             + "\nResponse bytes consumed: " + text(value, "responseBytes") + "\nFinal URL: " + text(value, "finalUrl");
         if (value.has("error")) info += "\nError: " + text(value, "error");
         updateText(overview, info); updateText(request, detail(value, "request")); updateText(response, detail(value, "response"));
+    }
+
+    private void loadPreview(JsonObject value) {
+        String url = value == null || !isImage(value) ? "" : text(value, "url");
+        if (url.equals(previewUrl)) return;
+        previewUrl = url; preview.setIcon(null); preview.setToolTipText(null); preview.setVisible(!url.isEmpty());
+        if (url.isEmpty()) return;
+        Object cached = previews.get(url);
+        if (cached != null) { showPreview(cached); return; }
+        String host;
+        try { host = Objects.toString(URI.create(url).getHost(), ""); }
+        catch (IllegalArgumentException error) { showPreview("Image preview unavailable: invalid URL."); return; }
+        if (host.equals("localhost") || host.startsWith("127.") || host.equals("[::1]") || host.equals("10.0.2.2")) {
+            showPreview("Image preview unavailable: this address is local to the device, so the desktop can't reach it."); return;
+        }
+        preview.setText("Loading image preview…");
+        images.execute(() -> {
+            Object result = fetchImage(url, value.has("requestHeaders") ? value.getAsJsonArray("requestHeaders") : new JsonArray());
+            SwingUtilities.invokeLater(() -> { previews.put(url, result); if (url.equals(previewUrl)) showPreview(result); });
+        });
+    }
+
+    private void showPreview(Object result) {
+        if (result instanceof java.awt.image.BufferedImage image) {
+            double scale = Math.min(1, Math.min(480.0 / image.getWidth(), 240.0 / image.getHeight()));
+            preview.setText(null);
+            preview.setIcon(new ImageIcon(image.getScaledInstance(Math.max(1, (int) (image.getWidth() * scale)), Math.max(1, (int) (image.getHeight() * scale)), Image.SCALE_SMOOTH)));
+            preview.setToolTipText(image.getWidth() + " × " + image.getHeight() + " px, downloaded by the desktop");
+        } else { preview.setIcon(null); preview.setText(result.toString()); }
+    }
+
+    static boolean isImage(JsonObject record) {
+        if (!text(record, "method").equals("GET") || !text(record, "status").startsWith("2")) return false;
+        String path = text(record, "url").toLowerCase(Locale.ROOT).replaceAll("[?#].*", "");
+        return contentType(record).startsWith("image/") || path.matches(".*\\.(png|jpe?g|gif|bmp|webp)");
+    }
+
+    static String contentType(JsonObject record) {
+        if (record.has("responseHeaders")) for (JsonElement element : record.getAsJsonArray("responseHeaders")) {
+            JsonArray pair = element.getAsJsonArray();
+            if (pair.get(0).getAsString().equalsIgnoreCase("Content-Type")) return pair.get(1).getAsString().toLowerCase(Locale.ROOT);
+        }
+        return "";
+    }
+
+    // Transport headers are left to the desktop's HTTP client; encoded bodies would not decode as images.
+    private static final Set<String> NOT_FORWARDED = Set.of("host", "connection", "content-length", "expect", "upgrade", "accept-encoding", "te", "keep-alive", "transfer-encoding");
+
+    /** Returns a BufferedImage, or a message explaining why there is no preview. Sends the app's own request headers. */
+    static Object fetchImage(String url, JsonArray headers) {
+        try {
+            URI uri = URI.create(url);
+            if (!"http".equals(uri.getScheme()) && !"https".equals(uri.getScheme())) return "Image preview needs an http or https URL.";
+            HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15)).setHeader("User-Agent", "NetLog desktop preview");
+            for (JsonElement element : headers) {
+                JsonArray pair = element.getAsJsonArray(); String name = pair.get(0).getAsString(), value = pair.get(1).getAsString();
+                if (NOT_FORWARDED.contains(name.toLowerCase(Locale.ROOT)) || value.equals("[REDACTED]")) continue;
+                try { builder.setHeader(name, value); } catch (IllegalArgumentException restricted) { }
+            }
+            HttpRequest request = builder.build();
+            HttpResponse<java.io.InputStream> response = HTTP.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            try (java.io.InputStream body = response.body()) {
+                int status = response.statusCode();
+                if (status / 100 != 2) return "Image preview unavailable: the server returned " + status + " to the desktop"
+                    + (status == 401 || status == 403 ? ", even with the app's request headers." : ".");
+                byte[] bytes = body.readNBytes(PREVIEW_LIMIT + 1);
+                if (bytes.length > PREVIEW_LIMIT) return "Image preview skipped: the image is larger than 10 MiB.";
+                java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+                return image != null ? image : "Image preview unavailable for this format (" + response.headers().firstValue("Content-Type").orElse("unknown") + "). PNG, JPEG, GIF, and BMP can be shown.";
+            }
+        } catch (IllegalArgumentException error) {
+            return "Image preview unavailable: invalid URL.";
+        } catch (java.io.IOException error) {
+            return "Image preview unavailable: the desktop couldn't download it (" + error.getClass().getSimpleName() + ").";
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt(); return "Image preview was interrupted.";
+        }
+    }
+
+    private JsonObject shown(JsonObject record) { return secrets.isSelected() ? record : masked(record); }
+    private String shownUrl(String url) { return secrets.isSelected() ? url : maskUrl(url); }
+
+    static JsonObject masked(JsonObject record) {
+        JsonObject copy = record.deepCopy();
+        for (String key : List.of("url", "finalUrl")) if (copy.has(key)) copy.addProperty(key, maskUrl(text(copy, key)));
+        for (String side : List.of("requestHeaders", "responseHeaders")) if (copy.has(side)) for (JsonElement element : copy.getAsJsonArray(side)) {
+            JsonArray pair = element.getAsJsonArray();
+            if (SECRET_HEADERS.contains(pair.get(0).getAsString().toLowerCase(Locale.ROOT))) pair.set(1, new JsonPrimitive("[REDACTED]"));
+        }
+        return copy;
+    }
+
+    static String maskUrl(String url) {
+        String result = url.replaceFirst("^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#@]*@", "$1[REDACTED]@");
+        int query = result.indexOf('?');
+        if (query < 0) return result;
+        int fragment = result.indexOf('#', query); if (fragment < 0) fragment = result.length();
+        StringJoiner parts = new StringJoiner("&");
+        for (String part : result.substring(query + 1, fragment).split("&", -1)) {
+            int equals = part.indexOf('=');
+            String name = (equals < 0 ? part : part.substring(0, equals)).toLowerCase(Locale.ROOT);
+            boolean secret = name.contains("token") || name.contains("secret") || name.contains("password") || name.equals("api_key") || name.equals("apikey");
+            parts.add(secret && equals >= 0 ? part.substring(0, equals + 1) + "[REDACTED]" : part);
+        }
+        return result.substring(0, query + 1) + parts + result.substring(fragment);
     }
 
     private static void updateText(JTextArea area, String value) { if (!area.getText().equals(value)) { int caret = area.getCaretPosition(); area.setText(value); area.setCaretPosition(Math.min(caret, value.length())); } }
@@ -417,9 +559,23 @@ public final class NetLogDesktop {
                 focus ? BorderFactory.createLineBorder(accent) : BorderFactory.createEmptyBorder(1, 1, 1, 1),
                 BorderFactory.createEmptyBorder(0, 9, 0, 9)));
             JsonObject record = visible.get(owner.convertRowIndexToModel(row));
-            setToolTipText(modelColumn == 1 || modelColumn == 5 ? text(record, "url") : Objects.toString(formatted, ""));
+            setToolTipText(modelColumn == 1 || modelColumn == 5 ? shownUrl(text(record, "url")) : Objects.toString(formatted, ""));
             return this;
         }
+    }
+
+    /** Image preview and response text scroll together; the text still wraps to the viewport width. */
+    private static final class PreviewAbove extends JPanel implements Scrollable {
+        PreviewAbove(JComponent preview, JComponent text) {
+            super(new BorderLayout(0, 8)); setOpaque(false);
+            preview.setBorder(BorderFactory.createEmptyBorder(10, 10, 0, 10));
+            add(preview, BorderLayout.NORTH); add(text, BorderLayout.CENTER);
+        }
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle visible, int orientation, int direction) { return 16; }
+        @Override public int getScrollableBlockIncrement(Rectangle visible, int orientation, int direction) { return visible.height; }
+        @Override public boolean getScrollableTracksViewportWidth() { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return getParent() instanceof JViewport viewport && viewport.getHeight() > getPreferredSize().height; }
     }
 
     private final class ColumnHeader extends DefaultTableCellRenderer {
@@ -435,11 +591,20 @@ public final class NetLogDesktop {
             setBackground(background); setForeground(arrow.isEmpty() ? muted : accent);
             setHorizontalAlignment(column == 3 || column == 4 ? SwingConstants.RIGHT : SwingConstants.LEFT);
             boolean keyboardFocus = owner.getTableHeader().hasFocus() && headerColumn == column;
+            int separator = column < owner.getColumnCount() - 1 ? 1 : 0; // marks the edge that can be dragged to resize
             setBorder(BorderFactory.createCompoundBorder(
-                keyboardFocus ? BorderFactory.createLineBorder(accent, 2) : BorderFactory.createMatteBorder(0, 0, 1, 0, line),
+                keyboardFocus ? BorderFactory.createLineBorder(accent, 2) : BorderFactory.createMatteBorder(0, 0, 1, separator, line),
                 BorderFactory.createEmptyBorder(0, 10, 0, 10)));
             return this;
         }
+    }
+
+    private void sortBy(int viewColumn) {
+        int column = table.convertColumnIndexToModel(viewColumn);
+        List<? extends RowSorter.SortKey> keys = sorter.getSortKeys();
+        boolean ascending = !keys.isEmpty() && keys.get(0).getColumn() == column && keys.get(0).getSortOrder() == SortOrder.ASCENDING;
+        sorter.setSortKeys(List.of(new RowSorter.SortKey(column, ascending ? SortOrder.DESCENDING : SortOrder.ASCENDING)));
+        table.getTableHeader().repaint();
     }
 
     private void start() {
