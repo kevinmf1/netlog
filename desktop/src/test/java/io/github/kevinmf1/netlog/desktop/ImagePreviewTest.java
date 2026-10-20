@@ -74,10 +74,20 @@ public class ImagePreviewTest {
         assertEquals("https://api.test/a/b@c", NetLogDesktop.maskUrl("https://api.test/a/b@c"));
         JsonObject raw = record("GET", 200, "https://api.test/a?apikey=k1", "application/json");
         JsonArray auth = new JsonArray(); auth.add("Authorization"); auth.add("Bearer real");
-        JsonArray requestHeaders = new JsonArray(); requestHeaders.add(auth); raw.add("requestHeaders", requestHeaders);
+        JsonArray apiKey = new JsonArray(); apiKey.add("api-key"); apiKey.add("test-api-secret");
+        JsonArray requestHeaders = new JsonArray(); requestHeaders.add(auth); requestHeaders.add(apiKey); raw.add("requestHeaders", requestHeaders);
+        JsonArray responseKey = new JsonArray(); responseKey.add("Api-Key"); responseKey.add("test-response-secret");
+        raw.getAsJsonArray("responseHeaders").add(responseKey);
         JsonObject masked = NetLogDesktop.masked(raw);
         assertFalse(masked.toString(), masked.toString().contains("Bearer real") || masked.toString().contains("k1"));
         assertTrue("The original record keeps its values", raw.toString().contains("Bearer real"));
+        assertTrue(raw.toString().contains("test-api-secret"));
+        assertTrue(raw.toString().contains("test-response-secret"));
+        assertTrue(NetLogDesktop.detail(masked, "request").contains("api-key: [REDACTED]"));
+        assertTrue(NetLogDesktop.detail(masked, "response").contains("Api-Key: [REDACTED]"));
+        assertTrue(NetLogDesktop.detail(masked, "response").contains("Content-Type: application/json"));
+        assertFalse(NetLogDesktop.curl(masked).contains("test-api-secret"));
+        assertTrue(NetLogDesktop.curl(raw).contains("test-api-secret"));
 
         Assume.assumeFalse("Requires a graphics environment for an invisible JFrame", GraphicsEnvironment.isHeadless());
         SwingUtilities.invokeAndWait(() -> {
@@ -87,11 +97,17 @@ public class ImagePreviewTest {
                 ingest.invoke(app, new AdbBridge.Batch(List.of(raw), "test"));
                 JTextArea request = field(app, "request"); JToggleButton secrets = field(app, "secrets");
                 assertTrue(request.getText().contains("Authorization: [REDACTED]"));
+                assertTrue(request.getText().contains("api-key: [REDACTED]"));
+                assertTrue(((JTextArea) field(app, "response")).getText().contains("Api-Key: [REDACTED]"));
                 secrets.doClick();
                 assertTrue(request.getText().contains("Authorization: Bearer real"));
+                assertTrue(request.getText().contains("api-key: test-api-secret"));
+                assertTrue(((JTextArea) field(app, "response")).getText().contains("Api-Key: test-response-secret"));
                 assertEquals("Hide sensitive values", secrets.getText());
                 secrets.doClick();
                 assertFalse(request.getText().contains("Bearer real"));
+                assertTrue(request.getText().contains("api-key: [REDACTED]"));
+                assertTrue(((JTextArea) field(app, "response")).getText().contains("Api-Key: [REDACTED]"));
             } catch (Exception error) { throw new RuntimeException(error); }
             finally {
                 try { ((ScheduledExecutorService) field(app, "worker")).shutdownNow(); ((JFrame) field(app, "frame")).dispose(); }

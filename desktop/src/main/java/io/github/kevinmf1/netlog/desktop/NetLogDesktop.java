@@ -19,7 +19,8 @@ import java.util.List;
 import java.util.concurrent.*;
 
 public final class NetLogDesktop {
-    private static final Gson PRETTY = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+    // serializeNulls: show the body as sent; Gson drops null members by default.
+    private static final Gson PRETTY = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().serializeNulls().create();
     private final AdbBridge bridge = new AdbBridge();
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "NetLog discovery"); t.setDaemon(true); return t; });
     private final LinkedHashMap<String, JsonObject> records = new LinkedHashMap<>();
@@ -37,7 +38,7 @@ public final class NetLogDesktop {
     private final JButton theme = new JButton("Dark mode");
     // The device sends real header and query values; they are masked here until the user reveals them.
     private final JToggleButton secrets = new JToggleButton("Show sensitive values");
-    static final Set<String> SECRET_HEADERS = Set.of("authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key");
+    static final Set<String> SECRET_HEADERS = Set.of("authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key");
     private final JPanel detailCards = new JPanel(new CardLayout());
     private int selectedDetail;
     private final JTextArea overview = area(), request = area(), response = area();

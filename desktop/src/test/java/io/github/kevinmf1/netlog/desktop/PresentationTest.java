@@ -16,6 +16,13 @@ public class PresentationTest {
         assertTrue(value.contains("Vary: Origin\nVary: Accept")); assertTrue(value.contains("Truncated at 64 KiB")); assertTrue(value.contains("\"ok\": true"));
     }
 
+    @Test public void detailsKeepNullMembersOfJsonBody() {
+        JsonObject record = new JsonObject();
+        record.addProperty("requestBody", "[{\"network\":{\"city\":null,\"zipcode\":0},\"user\":{\"user_id\":null}}]");
+        String value = NetLogDesktop.detail(record, "request");
+        assertTrue(value.contains("\"city\": null")); assertTrue(value.contains("\"user_id\": null")); assertTrue(value.contains("\"zipcode\": 0"));
+    }
+
     @Test public void cmdShortcutsSelectAllAndCopyOnMac() throws Exception {
         LookAndFeel previous = UIManager.getLookAndFeel();
         try {
