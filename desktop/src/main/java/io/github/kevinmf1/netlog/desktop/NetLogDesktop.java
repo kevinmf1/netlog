@@ -615,6 +615,20 @@ public final class NetLogDesktop {
         }, 0, 1, TimeUnit.SECONDS);
     }
 
+    /** The cross-platform look and feel binds text shortcuts to Ctrl only; on macOS, Cmd+A, Cmd+C, and the rest need the same actions. */
+    static void mirrorShortcuts(int menuMask) {
+        if (menuMask != InputEvent.META_DOWN_MASK) return;
+        for (String name : List.of("TextField.focusInputMap", "TextArea.focusInputMap")) {
+            InputMap map = (InputMap) UIManager.get(name);
+            if (map == null || map.allKeys() == null) continue;
+            for (KeyStroke key : map.allKeys()) {
+                int modifiers = key.getModifiers() & (InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK | InputEvent.ALT_DOWN_MASK | InputEvent.META_DOWN_MASK);
+                if ((modifiers & InputEvent.CTRL_DOWN_MASK) == 0 || key.getKeyCode() < KeyEvent.VK_A || key.getKeyCode() > KeyEvent.VK_Z) continue;
+                map.put(KeyStroke.getKeyStroke(key.getKeyCode(), modifiers & ~InputEvent.CTRL_DOWN_MASK | InputEvent.META_DOWN_MASK), map.get(key));
+            }
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--probe")) {
             try (AdbBridge bridge = new AdbBridge()) {
@@ -624,6 +638,7 @@ public final class NetLogDesktop {
             return;
         }
         UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
+        mirrorShortcuts(Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
         SwingUtilities.invokeLater(() -> new NetLogDesktop().start());
     }
 }
